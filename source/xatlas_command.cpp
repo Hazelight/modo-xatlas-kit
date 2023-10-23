@@ -18,6 +18,28 @@
 
 using namespace lx_err;
 
+/* Print function to write XA_PRINT to log */
+static int PrintToLog(const char* format, ...)
+{
+	va_list args;
+	va_start(args, format);
+
+	// Format the message
+	std::string message(254, '\0');
+	int result = std::vsnprintf(&(*message.begin()), 255, format, args);
+
+	CLxUser_LogService log_service;
+	CLxUser_Log log;
+	if(log_service.GetSubSystem(LXsLOG_LOGSYS, log))
+	{
+		CLxUser_LogEntry entry;
+		if(log_service.NewEntry(LXe_INFO, message.c_str(), entry))
+			log.AddEntry(entry);
+	}
+	va_end(args);
+	return result;
+}
+
 struct PolyVertex {
 	LXtPolygonID poly;
 	LXtPointID point;
@@ -306,7 +328,8 @@ void XAtlasCommand::basic_Execute(unsigned int flags)
 		material_names.push_back(material_name);
 	}
 
-	xatlas::Atlas* atlas = xatlas::Create();
+	xatlas::SetPrint(PrintToLog, true);
+	xatlas::Atlas* atlas = xatlas::Create();	
 
 	// Pass arguments to the option structs
 	xatlas::ChartOptions chartOptions;
