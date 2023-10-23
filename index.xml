@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<package version="1600">
+  <kit restart="YES" name="xatlas">
+    <source target="xatlas/index.cfg">index.cfg</source>
+    <source target="xatlas/win64/xatlas.dll">win64/xatlas.dll</source>
+  </kit>
+  <message button="Help">XAtlas Kit successfully installed."</message>
+</package>
