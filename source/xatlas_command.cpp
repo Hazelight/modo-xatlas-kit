@@ -29,21 +29,6 @@ struct Layer {
 	std::vector<PolyVertex> poly_vertices;
 };
 
-struct Vertex {
-	float position[3];
-	float uv[2];	
-	float normal[3];
-	int material_index;
-
-	bool operator==(const Vertex& v) const
-	{
-		bool bpos = fabs(position[0] - v.position[0]) < FLT_EPSILON && fabs(position[1] - v.position[1]) < FLT_EPSILON && fabs(position[2] - v.position[2]) < FLT_EPSILON;
-		bool buv = fabs(uv[0] - v.uv[0]) < FLT_EPSILON && fabs(uv[1] - v.uv[1]) < FLT_EPSILON;
-		bool bnorm = fabs(normal[0] - v.normal[0]) < FLT_EPSILON && fabs(normal[1] - v.normal[1]) < FLT_EPSILON && fabs(normal[2] - v.normal[2]) < FLT_EPSILON;
-		return bpos && buv && bnorm && material_index == v.material_index;
-	}
-};
-
 class UVMapVisitor : public CLxImpl_AbstractVisitor
 {
 	CLxUser_MeshMap* vmap;
@@ -353,18 +338,12 @@ void XAtlasCommand::basic_Execute(unsigned int flags)
 	for (uint32_t layer_index = 0; layer_index < layer_count; layer_index++)
 	{
 		std::vector<unsigned int> indices;
-		std::vector<int> face_material_data;
+		std::vector<uint32_t> face_material_data;
 		std::vector<float> positions;
 		std::vector<float> texcoords;
 		std::vector<float> normals;
-		
-		// TODO: optimize by not storing as much data, right now we just push every face vertex as it was unique.
-		//std::vector<Vertex> vertices;
 
 		Layer layer;
-
-		// per poly vertex count,
-		std::vector<unsigned char> face_vertex_count;
 
 		layer_scan.BaseMeshByIndex(layer_index, mesh);
 
@@ -390,8 +369,9 @@ void XAtlasCommand::basic_Execute(unsigned int flags)
 
 		vmap_id = vmap.ID();
 
-		// For each polygon, get uv & normal of poly-vert and push to texcoords and indices 
-		uint32_t polygon_count;
+		// For each polygon, get uv & normal of poly-vert and push to texcoords and indices
+		uint32_t polygon_count = 0;
+		uint32_t total_triangle_count = 0;
 		mesh.PolygonCount(&polygon_count);
 		for (uint32_t poly_index = 0; poly_index < polygon_count; poly_index++)
 		{
@@ -420,94 +400,58 @@ void XAtlasCommand::basic_Execute(unsigned int flags)
 					break;
 				}
 			}
-			face_material_data.push_back(material_index);
 
 			// TODO: set hidden faces as ignored?
 
-			uint32_t polyvertCount = 0;
-			poly.VertexCount(&polyvertCount);
-			face_vertex_count.push_back(polyvertCount);
-			for (uint32_t poly_vert_index = 0; poly_vert_index < polyvertCount; poly_vert_index++)
+			// For each triangle,
+			uint32_t triangle_count;
+			poly.GenerateTriangles(&triangle_count);
+			for (uint32_t triangle_index = 0; triangle_index < triangle_count; triangle_index++)
 			{
-				//Vertex v;
+				LXtPointID triangle_points[3];
+				poly.TriangleByIndex(triangle_index, triangle_points, triangle_points+1, triangle_points+2);
 
-				poly.VertexByIndex(poly_vert_index, &vert_id);
-				vert.Select(vert_id);
+				face_material_data.push_back(material_index);
 
-				uint32_t vert_index = 0;
-				vert.Index(&vert_index);
-
-				vert.Pos(pos);
-				//v.position[0] = pos[0];
-				//v.position[1] = pos[1];
-				//v.position[2] = pos[2];
-
-				positions.push_back(pos[0]);
-				positions.push_back(pos[1]);
-				positions.push_back(pos[2]);
-
-				// passing uv values to xatlas is optional, only used as hint
-				LxResult map_evaluate = poly.MapEvaluate(vmap_id, vert_id, uv);
-				if (map_evaluate == LXe_OK)
+				// For each point in the triangle,
+				for (int i = 0; i < 3; i++)
 				{
-					//v.uv[0] = uv[0];
-					//v.uv[1] = uv[1];
-					texcoords.push_back(uv[0]);
-					texcoords.push_back(uv[1]);
+					vert.Select(triangle_points[i]);
+
+					vert.Pos(pos);
+					positions.push_back(pos[0]);
+					positions.push_back(pos[1]);
+					positions.push_back(pos[2]);
+
+					// passing uv values to xatlas is optional, only used as hint
+					LxResult map_evaluate = poly.MapEvaluate(vmap_id, triangle_points[i], uv);
+					if (map_evaluate == LXe_OK)
+					{
+						texcoords.push_back(uv[0]);
+						texcoords.push_back(uv[1]);
+					}
+					else if (chartOptions.useInputMeshUvs)
+					{
+						// If we failed to get uvs and want to use input mesh uvs, tell users they need to map uvs
+						xatlas::Destroy(atlas);
+						basic_Message().SetMsg("Unmapped UVs");
+						throw(LXe_FAILED);
+					}
+					else
+					{
+						texcoords.push_back(0.0f);
+						texcoords.push_back(0.0f);
+					}
+
+					vert.Normal(poly_id, normal);
+					normals.push_back(normal[0]);
+					normals.push_back(normal[1]);
+					normals.push_back(normal[2]);
+
+					layer.poly_vertices.push_back(PolyVertex(poly_id, triangle_points[i]));
+					indices.push_back(total_triangle_count * 3 + i);
 				}
-				else if (chartOptions.useInputMeshUvs)
-				{
-					// If we failed to get uvs and want to use input mesh uvs, tell users they need to map uvs
-					xatlas::Destroy(atlas);
-					basic_Message().SetMsg("Unmapped UVs");
-					throw(LXe_FAILED);
-				}
-				else
-				{
-					//v.uv[0] = 0.0f;
-					//v.uv[1] = 0.0f;
-					texcoords.push_back(0.0f);
-					texcoords.push_back(0.0f);
-				}
-				
-				vert.Normal(poly_id, normal);
-				//v.normal[0] = normal[0];
-				//v.normal[1] = normal[1];
-				//v.normal[2] = normal[2];
-
-				//v.material_index = material_index;
-
-				normals.push_back(normal[0]);
-				normals.push_back(normal[1]);
-				normals.push_back(normal[2]);
-
-				//std::vector<Vertex>::iterator viter = std::find(vertices.begin(), vertices.end(), v);
-				//if (viter == vertices.end())
-				//{
-				//	indices.push_back(vertices.size());
-				//	
-				//	positions.push_back(v.position[0]);
-				//	positions.push_back(v.position[1]);
-				//	positions.push_back(v.position[2]);
-				//	
-				//	texcoords.push_back(v.uv[0]);
-				//	texcoords.push_back(v.uv[1]);
-
-				//	normals.push_back(v.normal[0]);
-				//	normals.push_back(v.normal[1]);
-				//	normals.push_back(v.normal[2]);
-
-				//	layer.poly_vertices.push_back(PolyVertex(poly_id, vert_id));
-
-				//	vertices.push_back(v);
-				//}
-				//else
-				//{
-				//	indices.push_back(std::distance(vertices.begin(), viter));
-				//}
-
-				layer.poly_vertices.push_back(PolyVertex(poly_id, vert_id));
-				indices.push_back(poly_index * polyvertCount + poly_vert_index);
+				total_triangle_count++;
 			}
 		}
 
@@ -530,8 +474,7 @@ void XAtlasCommand::basic_Execute(unsigned int flags)
 		mesh_decl.indexData = indices.data();
 		mesh_decl.indexFormat = xatlas::IndexFormat::UInt32;
 
-		mesh_decl.faceVertexCount = face_vertex_count.data();
-		mesh_decl.faceCount = polygon_count;
+		mesh_decl.faceMaterialData = face_material_data.data();
 
 		xatlas::AddMeshError error = xatlas::AddMesh(atlas, mesh_decl, layer_count);
 
@@ -569,6 +512,9 @@ void XAtlasCommand::basic_Execute(unsigned int flags)
 		throw(LXe_FAILED);
 	}
 
+	// Assuming layers are accessed in same order, and that atlas stores them in order it was given meshes.
+	// iterate over all layers, and get the xatlas mesh for that layer, then loop over all vertices and 
+	// set the value to the lx mesh.
 	for (uint32_t layer_index = 0; layer_index < layer_count; layer_index++)
 	{
 		xatlas::Mesh &xmesh = atlas->meshes[layer_index];
