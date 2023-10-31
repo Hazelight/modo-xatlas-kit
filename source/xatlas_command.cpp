@@ -299,6 +299,20 @@ void XAtlasCommand::basic_Execute(unsigned int flags)
 	uint32_t layer_count;
 	check(layer_scan.Count(&layer_count));
 
+	if (layer_count == 0)
+	{
+		layer_scan.Apply();
+		layer_scan.clear();
+		basic_Message().SetMsg("No active layers.");
+		throw(LXe_FAILED);
+	}
+
+	CLxUser_MeshService mesh_service;
+	LXtMarkMode selected;
+	mesh_service.ModeCompose(LXsMARK_SELECT, nullptr, &selected);
+	LXtMarkMode hidden;
+	mesh_service.ModeCompose(LXsMARK_HIDE, nullptr, &hidden);
+
 	LXtFVector pos;
 	LXtFVector2 uv;
 	LXtVector normal;
@@ -365,6 +379,7 @@ void XAtlasCommand::basic_Execute(unsigned int flags)
 		std::vector<float> positions;
 		std::vector<float> texcoords;
 		std::vector<float> normals;
+		std::vector<uint8_t> face_ignore_data;
 
 		Layer layer;
 
@@ -424,7 +439,14 @@ void XAtlasCommand::basic_Execute(unsigned int flags)
 				}
 			}
 
-			// TODO: set hidden faces as ignored?
+			// Don't atlas faces set to true, so we won't atlas hidden or unselected faces.
+			bool ignore = false;
+			CLxResult polygon_hidden = poly.TestMarks(hidden);
+			CLxResult polygon_selected = poly.TestMarks(selected);
+			if (polygon_hidden.isTrue() || polygon_selected.isFalse())
+			{
+				ignore = true;
+			}
 
 			// For each triangle,
 			uint32_t triangle_count;
@@ -435,6 +457,7 @@ void XAtlasCommand::basic_Execute(unsigned int flags)
 				poly.TriangleByIndex(triangle_index, triangle_points, triangle_points+1, triangle_points+2);
 
 				face_material_data.push_back(material_index);
+				face_ignore_data.push_back(ignore);
 
 				// For each point in the triangle,
 				for (int i = 0; i < 3; i++)
@@ -497,7 +520,8 @@ void XAtlasCommand::basic_Execute(unsigned int flags)
 		mesh_decl.indexData = indices.data();
 		mesh_decl.indexFormat = xatlas::IndexFormat::UInt32;
 
-		mesh_decl.faceMaterialData = face_material_data.data();
+		mesh_decl.faceMaterialData = face_material_data.data();		
+		mesh_decl.faceIgnoreData = (const bool*)face_ignore_data.data();
 
 		xatlas::AddMeshError error = xatlas::AddMesh(atlas, mesh_decl, layer_count);
 
@@ -563,8 +587,9 @@ void XAtlasCommand::basic_Execute(unsigned int flags)
 				continue;
 
 			// Normalize the computed uv coordinates from xatlas, output uvs are in atlas range
-			uv[0] = v.uv[0] / (float)atlas->width;
-			uv[1] = v.uv[1] / (float)atlas->height;
+			float maxSize = atlas->width <= atlas->height ? (float)atlas->height : (float)atlas->width;
+			uv[0] = v.uv[0] / maxSize;
+			uv[1] = v.uv[1] / maxSize;
 
 			// xatlas::Vertex.xref will give us the index of the original indices array,
 			PolyVertex pv = layers[layer_index].poly_vertices[v.xref];
